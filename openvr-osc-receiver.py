@@ -240,6 +240,20 @@ class OpenVRReceiver:
         self._pr('Sample recording stopped.')
 
 
+    def wait_for_data(self, timeout=30):
+        """ Wait until the first received OSC sample 
+        
+        Args:
+            timeout (int): Timeout in seconds
+        """
+        t_end = time.time() + timeout
+        while time.time() < t_end:
+            if self.samples_received:
+                return True
+            time.sleep(0.001)
+        self._pr('Timeout while waiting for first OSC sample.')
+
+
     def close(self):
         """ Shut down threads and close log file """
         self.stop_recording()
