@@ -4,8 +4,10 @@ OpenVRReceiver - class to receive OSC stream data from Brekel OpenVR recorder
 and save time-stamped motion data and log strings to file
 """
 
+import sys
 import time
 import math
+import argparse
 
 from multiprocessing import Queue
 from threading import Thread, Lock
@@ -24,11 +26,12 @@ class OpenVRReceiver:
         udp_ip (string): IP address to listen on (default: 127.0.0.1)
         udp_port (int): UPD port to listen on for OSC data
         auto_record (bool): if True, start recording as soon as data is received
-        debug (bool): if True, print received data to console
+        debug (bool): if True, print received data to stdout
+        status (bool): if True, print status messages to stdout (for command line use)
     """
 
     def __init__(self, log_file='openvr_data.txt', log_sep='\t', log_devices=['/HMD', '/Controller', '/Hand_L', '/Hand_R'],
-                 log_precision=10, udp_ip='127.0.0.1', udp_port=7775, auto_record=True, debug=False):
+                 log_precision=10, udp_ip='127.0.0.1', udp_port=7775, auto_record=True, debug=False, status=False):
 
         self.udp_port = udp_port
         self.udp_ip = udp_ip
@@ -37,6 +40,9 @@ class OpenVRReceiver:
         self.log_devices = log_devices
         self.log_precision = log_precision
         self.debug = debug
+        self.status = status
+        if self.debug:
+            self.status = True
 
         self.samples_received = False
         self._first_sample_timestamp = None
@@ -54,7 +60,7 @@ class OpenVRReceiver:
         # Set up log file formatting
         self.LOG_HEADER = ['device', 'deviceid', 'time_ovr', 'time_sys', 'rtime_ovr', 'rtime_sys', 
                            'posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ', 'rotW']
-        self.LOG_FORMAT = ['{:s}', '{:d}'] + 11 * ['{{:.{prec}f}}'.format(prec=5),]
+        self.LOG_FORMAT = ['{:s}', '{:d}'] + 11 * ['{{:.{prec}f}}'.format(prec=self.log_precision),]
         
         if '/Controller' in self.log_devices or '/GenericTracker' in self.log_devices:
             # Devices with button and axis states (+24 fields)
@@ -62,7 +68,7 @@ class OpenVRReceiver:
                                 'button8', 'button9', 'button10', 'button11', 'button12', 'button13', 'button14',
                                 'axis1X', 'axis1Y',	'axis2X', 'axis2Y',	'axis3X', 'axis3Y',	
                                 'axis4X', 'axis4Y',	'axis5X', 'axis5Y']
-            self.LOG_FORMAT += 24 * ['{{:.{prec}f}}'.format(prec=5),]
+            self.LOG_FORMAT += 24 * ['{{:.{prec}f}}'.format(prec=self.log_precision),]
 
         if '/Hand_L' in self.log_devices or '/Hand_R' in self.log_devices:
             # Hand and finger tracking data (+168 fields)
@@ -90,7 +96,7 @@ class OpenVRReceiver:
                                 'pinky2_posX', 'pinky2_posY', 'pinky2_posZ', 'pinky2_rotX', 'pinky2_rotY', 'pinky2_rotZ', 'pinky2_rotW',
                                 'pinky3_posX', 'pinky3_posY', 'pinky3_posZ', 'pinky3_rotX', 'pinky3_rotY', 'pinky3_rotZ', 'pinky3_rotW',
                                 'pinky4_posX', 'pinky4_posY', 'pinky4_posZ', 'pinky4_rotX', 'pinky4_rotY', 'pinky4_rotZ', 'pinky4_rotW']
-            self.LOG_FORMAT += 168 * ['{{:.{prec}f}}'.format(prec=5),]
+            self.LOG_FORMAT += 168 * ['{{:.{prec}f}}'.format(prec=self.log_precision),]
 
         # Field onsets when using Euler angles
         self._hand_euler_ix = zip(list(range(37, 205, 7)), list(range(7, 151, 6)))
@@ -98,6 +104,7 @@ class OpenVRReceiver:
         # Open log file and write header
         self._log = open(self.log_file, 'a')
         self._log_header()
+        self._pr('Recording to log file: {:s}'.format(self.log_file))
 
         # Set up OSC server in its own thread
         self._dispatcher = dispatcher.Dispatcher()
@@ -116,7 +123,8 @@ class OpenVRReceiver:
 
     def _pr(self, msg):
         """ Print a time-stamped message to the console """
-        print('[{:s}] '.format(time.strftime('%H:%m:%S')) + msg)
+        if self.status:
+            print('[{:s}] '.format(time.strftime('%H:%m:%S')) + msg)
 
 
     def _osc_server_thread(self):
@@ -194,7 +202,8 @@ class OpenVRReceiver:
                 self._rec_queue.put(s)
 
         if self.debug:
-            print("[{:s}]\t{:d} {:.5f} {:.2f} {:.5f}".format(address, osc_args[0], osc_args[1] * 1000.0, (osc_args[1]-self._first_sample_timestamp) * 1000.0, recv_time))
+            fmt = '{:.2f}\t{:19s}  X,Y,Z: {: .3f} {: .3f} {: .3f}  rX,rY,rZ,rW: {: 0.3f} {: 0.3f} {: 0.3f} {: 0.3f}'
+            self._pr(fmt.format(s[5], s[0], *s[6:13]))
 
 
     def _log_header(self):
@@ -238,13 +247,63 @@ class OpenVRReceiver:
 
         # Wait until recording queue is empty
         while not self._rec_queue.empty():
-            time.sleep(0.0001)
+            time.sleep(0.01)
         self._log_active = False # stop log thread
         self._log.close()
         self._pr('Log file closed.')
 
 
 if __name__ == '__main__':
-    ovr = OpenVRReceiver(log_file='openvr_testing.csv')
-    time.sleep(10)
+
+    # Create command line arguments for standalone operation
+    ap = argparse.ArgumentParser()
+    ap.add_argument('-f', dest='log_file', metavar='log_file', default='openvr_data.csv', type=str,
+                    help='Log file name (default: openvr_data.csv)')
+    a_help = 'One or more OSC addresses to log (e.g., "-a /HMD /Hand_L"). '
+    a_help += 'See OpenVR recorder docs for details on supported addresses'
+    ap.add_argument('-a', dest='address', metavar='addr', nargs='+',
+                    help=a_help)
+    ap.add_argument('-d', dest='duration', metavar='duration', default=None, type=int,
+                    help='Recording duration in seconds (default: until CTRL+C)')
+    ap.add_argument('-i', dest='udp_ip', metavar='ip_address', default='127.0.0.1', type=str,
+                    help='OSC server IP address to bind to (default: 127.0.0.1)')
+    ap.add_argument('-p', dest='udp_port', metavar='port', default=7775, type=int,
+                    help='OSC server UPD port to use (default: 7775)')
+    ap.add_argument('-v', dest='verbose', action='store_true',
+                    help='Verbose output: Print received OSC data to console')
+    ap.add_argument('--precision', metavar='digits', dest='precision', action='store', default=10,
+                    type=int, help='Decimal precision of output file (default: 10)')
+    args = ap.parse_args()
+
+    # Verify that all addresses are known
+    ADDRS = ['/HMD', '/TrackingReference', '/DisplayRedirect',
+             '/Controller', '/GenericTracker','/Hand_L', '/Hand_R']
+    if args.address is not None:
+        for a in args.address:
+            if a not in ADDRS:
+                print('Error: Unsupported address type specified: {:s}. Forgot a "/"?'.format(a))
+                sys.exit(-1)
+        log_devices = args.address
+    else:
+        log_devices = ['/HMD', '/Controller', '/Hand_L', '/Hand_R']
+
+    # Initialize receiver instance and start recording
+    ovr = OpenVRReceiver(log_file=args.log_file,
+                         log_precision=args.precision,
+                         log_devices=log_devices,
+                         udp_ip=args.udp_ip,
+                         udp_port=args.udp_port,
+                         debug=args.verbose,
+                         auto_record=True,
+                         status=True)
+    
+    if args.duration is not None:
+        time.sleep(args.duration)
+    else:
+        try:
+            while True:
+                time.sleep(0.00001)
+        except KeyboardInterrupt:
+            ovr._pr('Received KeyboardInterrupt, exiting.')
+    
     ovr.close()
