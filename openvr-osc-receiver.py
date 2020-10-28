@@ -13,14 +13,29 @@ from pythonosc import dispatcher, osc_server
 
 
 class OpenVRReceiver:
-    """ Class to receive and save OSC stream data from Brekel OpenVR recorder """
+    """ Class to receive and save OSC stream data from Brekel OpenVR recorder 
+    
+    Args:
+        log_file (str): Name of samples log file
+        log_sep (str): Separator string to use (default: Tab)
+        log_devices (list): List of device addresses to record and log,
+            e.g. ['/HMD', 'Controller'] (see Brekel OpenVR Recorder documentation)
+        log_precision (int): Decimal precision of recorded data
+        udp_ip (string): IP address to listen on (default: 127.0.0.1)
+        udp_port (int): UPD port to listen on for OSC data
+        auto_record (bool): if True, start recording as soon as data is received
+        debug (bool): if True, print received data to console
+    """
 
-    def __init__(self, log_file='openvr_data.txt', log_sep='\t', udp_ip='127.0.0.1', udp_port=7775, auto_record=True, debug=False):
+    def __init__(self, log_file='openvr_data.txt', log_sep='\t', log_devices=['/HMD', '/Controller', '/Hand_L', '/Hand_R'],
+                 log_precision=10, udp_ip='127.0.0.1', udp_port=7775, auto_record=True, debug=False):
 
         self.udp_port = udp_port
         self.udp_ip = udp_ip
         self.log_file = log_file
         self.log_sep = log_sep
+        self.log_devices = log_devices
+        self.log_precision = log_precision
         self.debug = debug
 
         self.samples_received = False
@@ -36,20 +51,59 @@ class OpenVRReceiver:
         self._recorder.daemon = True
         self._recorder.start()
 
-        # Set up log file and write file header
-        self.LOG_HEADER = ['address', 'deviceid', 'time_ovr', 'time_sys', 'rtime_ovr', 'rtime_sys', 
+        # Set up log file formatting
+        self.LOG_HEADER = ['device', 'deviceid', 'time_ovr', 'time_sys', 'rtime_ovr', 'rtime_sys', 
                            'posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ', 'rotW']
-        self.LOG_FORMAT = self.log_sep.join(['{:s}', '{:d}\t{:.2f}\t{:.5f}\t{:.2f}'] + 8 * ['{:.5f}',])
-        self.LOG_FORMAT += '\n'
+        self.LOG_FORMAT = ['{:s}', '{:d}'] + 11 * ['{{:.{prec}f}}'.format(prec=5),]
+        
+        if '/Controller' in self.log_devices or '/GenericTracker' in self.log_devices:
+            # Devices with button and axis states (+24 fields)
+            self.LOG_HEADER += ['button1', 'button2', 'button3', 'button4', 'button5', 'button6', 'button7',
+                                'button8', 'button9', 'button10', 'button11', 'button12', 'button13', 'button14',
+                                'axis1X', 'axis1Y',	'axis2X', 'axis2Y',	'axis3X', 'axis3Y',	
+                                'axis4X', 'axis4Y',	'axis5X', 'axis5Y']
+            self.LOG_FORMAT += 24 * ['{{:.{prec}f}}'.format(prec=5),]
+
+        if '/Hand_L' in self.log_devices or '/Hand_R' in self.log_devices:
+            # Hand and finger tracking data (+168 fields)
+            self.LOG_HEADER += ['thumb0_posX', 'thumb0_posY', 'thumb0_posZ', 'thumb0_rotX', 'thumb0_rotY', 'thumb0_rotZ', 'thumb0_rotW',
+                                'thumb1_posX', 'thumb1_posY', 'thumb1_posZ', 'thumb1_rotX', 'thumb1_rotY', 'thumb1_rotZ', 'thumb1_rotW',
+                                'thumb2_posX', 'thumb2_posY', 'thumb2_posZ', 'thumb2_rotX', 'thumb2_rotY', 'thumb2_rotZ', 'thumb2_rotW',
+                                'thumb3_posX', 'thumb3_posY', 'thumb3_posZ', 'thumb3_rotX', 'thumb3_rotY', 'thumb3_rotZ', 'thumb3_rotW',                              
+                                'index0_posX', 'index0_posY', 'index0_posZ', 'index0_rotX', 'index0_rotY', 'index0_rotZ', 'index0_rotW',
+                                'index1_posX', 'index1_posY', 'index1_posZ', 'index1_rotX', 'index1_rotY', 'index1_rotZ', 'index1_rotW',
+                                'index2_posX', 'index2_posY', 'index2_posZ', 'index2_rotX', 'index2_rotY', 'index2_rotZ', 'index2_rotW',
+                                'index3_posX', 'index3_posY', 'index3_posZ', 'index3_rotX', 'index3_rotY', 'index3_rotZ', 'index3_rotW',
+                                'index4_posX', 'index4_posY', 'index4_posZ', 'index4_rotX', 'index4_rotY', 'index4_rotZ', 'index4_rotW',
+                                'middle0_posX', 'middle0_posY', 'middle0_posZ', 'middle0_rotX', 'middle0_rotY', 'middle0_rotZ', 'middle0_rotW',
+                                'middle1_posX', 'middle1_posY', 'middle1_posZ', 'middle1_rotX', 'middle1_rotY', 'middle1_rotZ', 'middle1_rotW',
+                                'middle2_posX', 'middle2_posY', 'middle2_posZ', 'middle2_rotX', 'middle2_rotY', 'middle2_rotZ', 'middle2_rotW',
+                                'middle3_posX', 'middle3_posY', 'middle3_posZ', 'middle3_rotX', 'middle3_rotY', 'middle3_rotZ', 'middle3_rotW',
+                                'middle4_posX', 'middle4_posY', 'middle4_posZ', 'middle4_rotX', 'middle4_rotY', 'middle4_rotZ', 'middle4_rotW',
+                                'ring0_posX', 'ring0_posY', 'ring0_posZ', 'ring0_rotX', 'ring0_rotY', 'ring0_rotZ', 'ring0_rotW',
+                                'ring1_posX', 'ring1_posY', 'ring1_posZ', 'ring1_rotX', 'ring1_rotY', 'ring1_rotZ', 'ring1_rotW',
+                                'ring2_posX', 'ring2_posY', 'ring2_posZ', 'ring2_rotX', 'ring2_rotY', 'ring2_rotZ', 'ring2_rotW',
+                                'ring3_posX', 'ring3_posY', 'ring3_posZ', 'ring3_rotX', 'ring3_rotY', 'ring3_rotZ', 'ring3_rotW',
+                                'ring4_posX', 'ring4_posY', 'ring4_posZ', 'ring4_rotX', 'ring4_rotY', 'ring4_rotZ', 'ring4_rotW',
+                                'pinky0_posX', 'pinky0_posY', 'pinky0_posZ', 'pinky0_rotX', 'pinky0_rotY', 'pinky0_rotZ', 'pinky0_rotW',
+                                'pinky1_posX', 'pinky1_posY', 'pinky1_posZ', 'pinky1_rotX', 'pinky1_rotY', 'pinky1_rotZ', 'pinky1_rotW',
+                                'pinky2_posX', 'pinky2_posY', 'pinky2_posZ', 'pinky2_rotX', 'pinky2_rotY', 'pinky2_rotZ', 'pinky2_rotW',
+                                'pinky3_posX', 'pinky3_posY', 'pinky3_posZ', 'pinky3_rotX', 'pinky3_rotY', 'pinky3_rotZ', 'pinky3_rotW',
+                                'pinky4_posX', 'pinky4_posY', 'pinky4_posZ', 'pinky4_rotX', 'pinky4_rotY', 'pinky4_rotZ', 'pinky4_rotW']
+            self.LOG_FORMAT += 168 * ['{{:.{prec}f}}'.format(prec=5),]
+
+        # Field onsets when using Euler angles
+        self._hand_euler_ix = zip(list(range(37, 205, 7)), list(range(7, 151, 6)))
+
+        # Open log file and write header
         self._log = open(self.log_file, 'a')
         self._log_header()
 
         # Set up OSC server in its own thread
-        ADDR_TO_MAP = ['/HMD']#, '/Controller', '/Hand_L', '/Hand_R']
         self._dispatcher = dispatcher.Dispatcher()
-        for addr in ADDR_TO_MAP:
+        for addr in self.log_devices:
             self._dispatcher.map(addr, self._osc_msg_handler)
-        self._pr('Listening for addresses: {:s}.'.format(str(ADDR_TO_MAP)))
+        self._pr('Listening for addresses: {:s}.'.format(str(self.log_devices)))
         self._oscserver = None
         self._oscthread = Thread(target=self._osc_server_thread, name='oscserver')
         self._oscthread.daemon = True
@@ -61,13 +115,13 @@ class OpenVRReceiver:
 
 
     def _pr(self, msg):
-        """ Print a time-stamped message """
+        """ Print a time-stamped message to the console """
         print('[{:s}] '.format(time.strftime('%H:%m:%S')) + msg)
 
 
     def _osc_server_thread(self):
-        """ OSC server running in separate thread """
-        self._oscserver = osc_server.ThreadingOSCUDPServer((self.udp_ip, self.udp_port), self._dispatcher)
+        """ Thread for OSC blocking server """
+        self._oscserver = osc_server.BlockingOSCUDPServer((self.udp_ip, self.udp_port), self._dispatcher)
         self._pr('Starting OSC server on {:s}:{:d}...'.format(self.udp_ip, self.udp_port))
         self._oscserver.serve_forever()
         self._pr('OSC server shut down.')
@@ -77,6 +131,9 @@ class OpenVRReceiver:
         """ OSC Message handling callback """
         recv_time = time.time()
         
+        # s: 0:5 - metadata, 6:12 - transform, 13:36 - controller, 37:205 - skeleton
+        s = ['', -1] + [math.nan,] * (len(self.LOG_FORMAT)-2)
+
         # Store time stamps of first received packet
         if not self.samples_received:
             self._first_sample_timestamp = osc_args[1]
@@ -84,21 +141,54 @@ class OpenVRReceiver:
             self.samples_received = True
 
         if self._recording:
-            s = [address.strip('/'),
-                 osc_args[0], 
-                 osc_args[1] * 1000.0, 
-                 recv_time, 
-                 (osc_args[1] - self._first_sample_timestamp) * 1000.0, 
-                 (recv_time - self._first_sample_time) * 1000]
-            
-            if len(osc_args) < 9:
-                # Rotation data is in Euler angles
-                s.extend(osc_args[2:])
-                s.append(math.nan) # fill rotW field
-            else:
-                # Rotation data is in Quaternions
-                s.extend(osc_args[2:])
+            if address in ['/HMD', '/TrackingReference', '/DisplayRedirect']:
+                s[0:6] = [address.strip('/'), 
+                          osc_args[0],
+                          osc_args[1] * 1000.0,
+                          recv_time,
+                          (osc_args[1] - self._first_sample_timestamp) * 1000.0, 
+                          (recv_time - self._first_sample_time) * 1000]
 
+                if len(osc_args) == 8:
+                    # Rotation data is in Euler angles
+                    s[6:12] = osc_args[2:8]
+                elif len(osc_args) == 9:
+                    # Rotation data is in Quaternions
+                    s[6:13] = osc_args[2:9]
+
+            if address in ['/Controller', '/GenericTracker']:
+                s[0:6] = [address.strip('/'), 
+                          osc_args[0],
+                          osc_args[1] * 1000.0,
+                          recv_time,
+                          (osc_args[1] - self._first_sample_timestamp) * 1000.0, 
+                          (recv_time - self._first_sample_time) * 1000]
+
+                if len(osc_args) == 32:
+                    s[6:12] = osc_args[2:8] # Euler
+                    s[13:37] = osc_args[8:33]
+                elif len(osc_args) == 33:
+                    s[6:13] = osc_args[2:9] # Quat
+                    s[13:37] = osc_args[9:34]
+
+            if address in ['/Hand_L', '/Hand_R']:
+                s[0:6] = [address.strip('/'), 
+                          -1, # Hands have no ID field in OSC data
+                          osc_args[0] * 1000.0,
+                          recv_time,
+                          (osc_args[0] - self._first_sample_timestamp) * 1000.0, 
+                          (recv_time - self._first_sample_time) * 1000]
+
+                if len(osc_args) == 151:
+                    s[6:12] = osc_args[1:7]
+                    self._hand_euler_ix = zip(list(range(37, 205, 7)), list(range(7, 151, 6)))
+                    # Euler: Skip over rotW fields in output
+                    for ix in self._hand_euler_ix:
+                        s[ix[0]:ix[0]+6] = osc_args[ix[1]:ix[1]+6]
+                elif len(osc_args) == 176: # Quat
+                    s[6:13] = osc_args[1:8]
+                    s[37:205] = osc_args[8:177]
+                
             # Add to recording queue
             with self._threadlock:
                 self._rec_queue.put(s)
@@ -106,18 +196,15 @@ class OpenVRReceiver:
         if self.debug:
             print("[{:s}]\t{:d} {:.5f} {:.2f} {:.5f}".format(address, osc_args[0], osc_args[1] * 1000.0, (osc_args[1]-self._first_sample_timestamp) * 1000.0, recv_time))
 
-        # len(args) == 8 -> rotation in euler, 9 -> quaternions
-        #print(len(osc_args))
-
 
     def _log_header(self):
-        """ Write the header to log file """
+        """ Write column header to the log file """
         if self._log:
             self._log.write(self.log_sep.join(self.LOG_HEADER) + '\n')
 
 
     def _log_sample(self, queue):
-        """ Thread function: Write available sample to log file """
+        """ Thread to write available sample to log file """
         while self._log_active:
             sample = None
 
@@ -126,10 +213,10 @@ class OpenVRReceiver:
                     sample = queue.get()
             
             if sample:
-                self._log.write(self.LOG_FORMAT.format(*sample))
+                self._log.write(self.log_sep.join(self.LOG_FORMAT).format(*sample) + '\n')
                 self._log.flush()
 
-            time.sleep(0.0001)
+            time.sleep(0.00001)
 
 
     def start_recording(self):
@@ -139,19 +226,19 @@ class OpenVRReceiver:
 
 
     def stop_recording(self):
-        """ Stop sample recording, but do not close log file """
+        """ Stop sample recording (does not close file) """
         self._recording = False
         self._pr('Sample recording stopped.')
 
 
     def close(self):
-        """ Shut down and close log file """
+        """ Shut down threads and close log file """
         self.stop_recording()
         self._oscserver.shutdown()
 
         # Wait until recording queue is empty
         while not self._rec_queue.empty():
-            time.sleep(0.001)
+            time.sleep(0.0001)
         self._log_active = False # stop log thread
         self._log.close()
         self._pr('Log file closed.')
