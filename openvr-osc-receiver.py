@@ -45,9 +45,10 @@ class OpenVRReceiver:
             self.status = True
 
         self.samples_received = False
-        self._first_sample_timestamp = None
-        self._first_sample_time = None
-        
+        self._first_sample_timestamp = -1.0
+        self._first_sample_time = -1.0
+        self._latest_sample_timestamp = -1.0
+
         # Set up and start recorder thread
         self._recording = False
         self._log_active = True
@@ -58,9 +59,9 @@ class OpenVRReceiver:
         self._recorder.start()
 
         # Set up log file formatting
-        self.LOG_HEADER = ['device', 'deviceid', 'time_ovr', 'time_sys', 'rtime_ovr', 'rtime_sys', 
+        self.LOG_HEADER = ['device', 'message', 'deviceid', 'time_ovr', 'time_sys', 'rtime_ovr', 'rtime_sys', 
                            'posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ', 'rotW']
-        self.LOG_FORMAT = ['{:s}', '{:d}'] + 11 * ['{{:.{prec}f}}'.format(prec=self.log_precision),]
+        self.LOG_FORMAT = ['{:s}', '{:s}', '{:d}'] + 11 * ['{{:.{prec}f}}'.format(prec=self.log_precision),]
         
         if '/Controller' in self.log_devices or '/GenericTracker' in self.log_devices:
             # Devices with button and axis states (+24 fields)
@@ -139,18 +140,20 @@ class OpenVRReceiver:
         """ OSC Message handling callback """
         recv_time = time.time()
         
-        # s: 0:5 - metadata, 6:12 - transform, 13:36 - controller, 37:205 - skeleton
-        s = ['', -1] + [math.nan,] * (len(self.LOG_FORMAT)-2)
+        # s: 0:6 - metadata, 7:13 - transform, 14:37 - controller, 38:206 - skeleton
+        s = ['', '', -1] + [math.nan,] * (len(self.LOG_FORMAT)-3)
 
         # Store time stamps of first received packet
         if not self.samples_received:
             self._first_sample_timestamp = osc_args[1]
             self._first_sample_time = recv_time
             self.samples_received = True
+        self._latest_sample_timestamp = osc_args[1]
 
         if self._recording:
             if address in ['/HMD', '/TrackingReference', '/DisplayRedirect']:
-                s[0:6] = [address.strip('/'), 
+                s[0:7] = [address.strip('/'), 
+                          '', 
                           osc_args[0],
                           osc_args[1] * 1000.0,
                           recv_time,
@@ -159,13 +162,14 @@ class OpenVRReceiver:
 
                 if len(osc_args) == 8:
                     # Rotation data is in Euler angles
-                    s[6:12] = osc_args[2:8]
+                    s[7:13] = osc_args[2:8]
                 elif len(osc_args) == 9:
                     # Rotation data is in Quaternions
-                    s[6:13] = osc_args[2:9]
+                    s[7:14] = osc_args[2:9]
 
             if address in ['/Controller', '/GenericTracker']:
-                s[0:6] = [address.strip('/'), 
+                s[0:7] = [address.strip('/'), 
+                          '',
                           osc_args[0],
                           osc_args[1] * 1000.0,
                           recv_time,
@@ -173,14 +177,15 @@ class OpenVRReceiver:
                           (recv_time - self._first_sample_time) * 1000]
 
                 if len(osc_args) == 32:
-                    s[6:12] = osc_args[2:8] # Euler
-                    s[13:37] = osc_args[8:33]
+                    s[7:13] = osc_args[2:8] # Euler
+                    s[14:38] = osc_args[8:33]
                 elif len(osc_args) == 33:
-                    s[6:13] = osc_args[2:9] # Quat
-                    s[13:37] = osc_args[9:34]
+                    s[7:14] = osc_args[2:9] # Quat
+                    s[14:38] = osc_args[9:34]
 
             if address in ['/Hand_L', '/Hand_R']:
-                s[0:6] = [address.strip('/'), 
+                s[0:7] = [address.strip('/'), 
+                          '',
                           -1, # Hands have no ID field in OSC data
                           osc_args[0] * 1000.0,
                           recv_time,
@@ -188,14 +193,14 @@ class OpenVRReceiver:
                           (recv_time - self._first_sample_time) * 1000]
 
                 if len(osc_args) == 151:
-                    s[6:12] = osc_args[1:7]
-                    self._hand_euler_ix = zip(list(range(37, 205, 7)), list(range(7, 151, 6)))
+                    s[7:13] = osc_args[1:7]
+                    self._hand_euler_ix = zip(list(range(38, 206, 7)), list(range(7, 151, 6)))
                     # Euler: Skip over rotW fields in output
                     for ix in self._hand_euler_ix:
                         s[ix[0]:ix[0]+6] = osc_args[ix[1]:ix[1]+6]
                 elif len(osc_args) == 176: # Quat
-                    s[6:13] = osc_args[1:8]
-                    s[37:205] = osc_args[8:177]
+                    s[7:14] = osc_args[1:8]
+                    s[38:206] = osc_args[8:177]
                 
             # Add to recording queue
             with self._threadlock:
@@ -203,7 +208,7 @@ class OpenVRReceiver:
 
         if self.debug:
             fmt = '{:.2f}\t{:19s}  X,Y,Z: {: .3f} {: .3f} {: .3f}  rX,rY,rZ,rW: {: 0.3f} {: 0.3f} {: 0.3f} {: 0.3f}'
-            self._pr(fmt.format(s[5], s[0], *s[6:13]))
+            self._pr(fmt.format(s[6], s[0], *s[7:14]))
 
 
     def _log_header(self):
@@ -225,7 +230,39 @@ class OpenVRReceiver:
                 self._log.write(self.log_sep.join(self.LOG_FORMAT).format(*sample) + '\n')
                 self._log.flush()
 
-            time.sleep(0.00001)
+            time.sleep(0.000001)
+
+
+    def log_message(self, message, device='LogMessage'):
+        """ Write time-stamped message string to log file 
+        
+        Args:
+            device (str): Value to store in "device" field
+        """
+        recv_time = time.time()
+        if self.samples_received:
+            latest_timestamp = self._latest_sample_timestamp * 1000.0
+            latest_time_rel = (self._latest_sample_timestamp - self._first_sample_timestamp) * 1000.0
+            recv_time_rel = (recv_time - self._first_sample_time) * 1000
+        else:
+            # might log messages before having seen a sample
+            latest_timestamp = math.nan
+            latest_time_rel = math.nan
+            recv_time_rel = math.nan
+
+        s = [device,
+             '"{:s}"'.format(message),
+             -1,
+             latest_timestamp,
+             recv_time * 1000.0,
+             latest_time_rel,
+             recv_time_rel] + [math.nan,] * (len(self.LOG_FORMAT)-7)
+
+        with self._threadlock:
+            self._rec_queue.put(s)
+
+        # Also print to console if status messages are enabled
+        self._pr('LogMessage: {:s}'.format(message))
 
 
     def start_recording(self):
@@ -260,8 +297,10 @@ class OpenVRReceiver:
         self._oscserver.shutdown()
 
         # Wait until recording queue is empty
+        if self._rec_queue.qsize() > 100:
+            self._pr('Saving remaining samples to log file...')
         while not self._rec_queue.empty():
-            time.sleep(0.01)
+            pass
         self._log_active = False # stop log thread
         self._log.close()
         self._pr('Log file closed.')
