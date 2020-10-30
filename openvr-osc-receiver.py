@@ -138,7 +138,7 @@ class OpenVRReceiver:
 
     def _osc_msg_handler(self, address, *osc_args):
         """ OSC Message handling callback """
-        recv_time = time.time()
+        recv_time = time.perf_counter()
         
         # s: 0:6 - metadata, 7:13 - transform, 14:37 - controller, 38:206 - skeleton
         s = ['', '', -1] + [math.nan,] * (len(self.LOG_FORMAT)-3)
@@ -148,15 +148,15 @@ class OpenVRReceiver:
             self._first_sample_timestamp = osc_args[1]
             self._first_sample_time = recv_time
             self.samples_received = True
-        self._latest_sample_timestamp = osc_args[1]
 
         if self._recording:
             if address in ['/HMD', '/TrackingReference', '/DisplayRedirect']:
+                self._latest_sample_timestamp = osc_args[1]
                 s[0:7] = [address.strip('/'), 
                           '', 
                           osc_args[0],
                           osc_args[1] * 1000.0,
-                          recv_time,
+                          recv_time * 1000.0,
                           (osc_args[1] - self._first_sample_timestamp) * 1000.0, 
                           (recv_time - self._first_sample_time) * 1000]
 
@@ -168,11 +168,12 @@ class OpenVRReceiver:
                     s[7:14] = osc_args[2:9]
 
             if address in ['/Controller', '/GenericTracker']:
+                self._latest_sample_timestamp = osc_args[1]
                 s[0:7] = [address.strip('/'), 
                           '',
                           osc_args[0],
                           osc_args[1] * 1000.0,
-                          recv_time,
+                          recv_time * 1000.0,
                           (osc_args[1] - self._first_sample_timestamp) * 1000.0, 
                           (recv_time - self._first_sample_time) * 1000]
 
@@ -184,11 +185,12 @@ class OpenVRReceiver:
                     s[14:38] = osc_args[9:34]
 
             if address in ['/Hand_L', '/Hand_R']:
+                self._latest_sample_timestamp = osc_args[0]
                 s[0:7] = [address.strip('/'), 
                           '',
                           -1, # Hands have no ID field in OSC data
                           osc_args[0] * 1000.0,
-                          recv_time,
+                          recv_time * 1000.0,
                           (osc_args[0] - self._first_sample_timestamp) * 1000.0, 
                           (recv_time - self._first_sample_time) * 1000]
 
@@ -239,7 +241,7 @@ class OpenVRReceiver:
         Args:
             device (str): Value to store in "device" field
         """
-        recv_time = time.time()
+        recv_time = time.perf_counter()
         if self.samples_received:
             latest_timestamp = self._latest_sample_timestamp * 1000.0
             latest_time_rel = (self._latest_sample_timestamp - self._first_sample_timestamp) * 1000.0
@@ -283,8 +285,8 @@ class OpenVRReceiver:
         Args:
             timeout (int): Timeout in seconds
         """
-        t_end = time.time() + timeout
-        while time.time() < t_end:
+        t_end = time.perf_counter() + timeout
+        while time.perf_counter() < t_end:
             if self.samples_received:
                 return True
             time.sleep(0.001)
@@ -293,7 +295,8 @@ class OpenVRReceiver:
 
     def close(self):
         """ Shut down threads and close log file """
-        self.stop_recording()
+        if self._recording:
+            self.stop_recording()
         self._oscserver.shutdown()
 
         # Wait until recording queue is empty
